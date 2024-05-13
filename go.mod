@@ -1,4 +1,4 @@
-module go-pasaportul
+module github.com/MereleDulci/go-pasaportul
 
 go 1.22.1
 
