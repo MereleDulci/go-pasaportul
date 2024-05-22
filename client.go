@@ -1,6 +1,7 @@
 package pasaportul
 
 import (
+	"fmt"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -8,7 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
+	"slices"
 	"github.com/MereleDulci/jsonapi"
 	"github.com/cristalhq/jwt/v5"
 	"io"
@@ -20,27 +21,45 @@ import (
 
 type Authorizer interface {
 	Host() string
-	Trim(token string) string
-	TokenClaims(token string) *jwt.RegisteredClaims
-	PasswordLogin(username, password string) (*AccessToken, error)
-	ClientCredentialsLogin() (*AccessToken, error)
+	PasswordLogin(ctx context.Context, username string, password string) (*AccessToken, error)
+	ClientCredentialsLogin(context.Context) (*AccessToken, error)
+}
+
+type Validator interface {
+	Host() string
+	Trim(string) string
+	Validate(ctx context.Context, token string) (*jwt.RegisteredClaims, error)
 }
 
 type UserManager interface {
 	CreateUserAccount(ctx context.Context, account *UserAccount) (string, error)
 }
 
-type Client struct {
+type Remote struct {
+	host string
+}
+
+type Local struct {
+	*Remote
 	clientId     string
 	clientSecret string
 	verifier     jwt.Verifier
-	host         string
 }
 
 type UserManagement struct {
 	authorizer   Authorizer
 	accessToken  string
 	refreshToken string
+}
+
+type ValdiationRequest struct {
+	ID   string `jsonapi:"primary,token-validations"`
+	Token string `jsonapi:"attr,token"`
+}
+
+type ValidationResponse struct {
+	ID                   string `jsonapi:"primary,token-validation-results"`
+	Claims jwt.RegisteredClaims `jsonapi:"attr,claims"`
 }
 
 type AccessToken struct {
@@ -50,7 +69,6 @@ type AccessToken struct {
 	RefreshedBy *RefreshToken `jsonapi:"relation,refreshedBy"`
 	IssuedAt    time.Time     `jsonapi:"attr,issuedAt,rfc3339"`
 	ExpiresAt   time.Time     `jsonapi:"attr,expiresAt,rfc3339"`
-	UsedAt      *time.Time    `jsonapi:"attr,usedAt,rfc3339"`
 }
 
 type RefreshToken struct {
@@ -68,7 +86,7 @@ type UserAccount struct {
 	Password string `jsonapi:"attr,password"`
 }
 
-func MakeClient(clientId string, clientSecret string, publicKeyPath string) (*Client, error) {
+func MakeLocal(clientId string, clientSecret string, publicKeyPath string) (*Local, error) {
 
 	pubKeyFile, err := os.Open(publicKeyPath)
 	if err != nil {
@@ -99,11 +117,11 @@ func MakeClient(clientId string, clientSecret string, publicKeyPath string) (*Cl
 		return nil, err
 	}
 
-	return &Client{
+	return &Local{
+		Remote: MakeRemote(),
 		clientId:     clientId,
 		clientSecret: clientSecret,
 		verifier:     verifier,
-		host:         "https://pasaportul.mereledulci.md",
 	}, nil
 }
 
@@ -113,39 +131,44 @@ func MakeUserManager(authClient Authorizer) *UserManagement {
 	}
 }
 
-// WithHostname replaces the base host to be used for authentication requests. Useful for testing.
-func (pc *Client) WithHostname(host string) *Client {
-	pc.host = host
+func MakeRemote() *Remote {
+	return &Remote{
+		host: "https://pasaportul.mereledulci.md",
+	}
+}
+
+func (pc *Local) WithHostname(host string) *Local {
+	pc.Remote.WithHostname(host)
 	return pc
 }
 
 // Host returns the current base host used for authentication requests.
-func (pc *Client) Host() string {
-	return pc.host
+func (pc *Local) Host() string {
+	return pc.Remote.host
 }
 
-// Trim cuts the token part from the Bearer header it usually comes with
-func (pc *Client) Trim(bearer string) string {
-	bearerPrefixLen := len("Bearer ")
-	if bearer[:bearerPrefixLen] == "Bearer " {
-		return bearer[bearerPrefixLen:]
-	}
 
-	return bearer
-}
 
-// TokenClaims Validates token and parses registered claims from it. Returns nil if validation fails.
-func (pc *Client) TokenClaims(bearer string) *jwt.RegisteredClaims {
+// Validate Validates token locally using configured key and parses registered claims from it. Returns nil if validation fails.
+func (pc *Local) Validate(ctx context.Context, bearer string) (*jwt.RegisteredClaims, error) {
 	claims := &jwt.RegisteredClaims{}
 	err := jwt.ParseClaims([]byte(pc.Trim(bearer)), pc.verifier, claims)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
-	return claims
+	if !claims.IsValidAt(time.Now().UTC()) {
+		return nil, errors.New("token is not valid at a given time")
+	}
+
+	if slices.Contains(claims.Audience, pc.clientId) == false {
+		return nil, errors.New("invalid audience")
+	}
+
+	return claims, nil
 }
 
-func (pc *Client) PasswordLogin(username, password string) (*AccessToken, error) {
+func (pc *Local) PasswordLogin(ctx context.Context, username, password string) (*AccessToken, error) {
 	pasaportulJson, err := json.Marshal(map[string]string{
 		"client_id":     pc.clientId,
 		"client_secret": pc.clientSecret,
@@ -158,7 +181,13 @@ func (pc *Client) PasswordLogin(username, password string) (*AccessToken, error)
 	}
 
 	pasaportulPayload := bytes.NewBuffer(pasaportulJson)
-	res, err := http.Post(pc.host+"/v1/authenticate", "application/json", pasaportulPayload)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pc.host+"/v1/authenticate", pasaportulPayload)
+	if err != nil  {
+		return nil, err
+	}
+
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +205,7 @@ func (pc *Client) PasswordLogin(username, password string) (*AccessToken, error)
 	return accessToken, nil
 }
 
-func (pc *Client) ClientCredentialsLogin() (*AccessToken, error) {
+func (pc *Local) ClientCredentialsLogin(ctx context.Context) (*AccessToken, error) {
 	pasaportulJson, err := json.Marshal(map[string]string{
 		"client_id":     pc.clientId,
 		"client_secret": pc.clientSecret,
@@ -187,7 +216,12 @@ func (pc *Client) ClientCredentialsLogin() (*AccessToken, error) {
 	}
 
 	pasaportulPayload := bytes.NewBuffer(pasaportulJson)
-	res, err := http.Post(pc.host+"/v1/authenticate", "application/json", pasaportulPayload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pc.host+"/v1/authenticate", pasaportulPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +240,7 @@ func (pc *Client) ClientCredentialsLogin() (*AccessToken, error) {
 }
 
 func (um *UserManagement) CreateUserAccount(ctx context.Context, account *UserAccount) (string, error) {
-	if err := um.ensureAccessToken(); err != nil {
+	if err := um.ensureAccessToken(ctx); err != nil {
 		return "", err
 	}
 
@@ -227,14 +261,16 @@ func (um *UserManagement) CreateUserAccount(ctx context.Context, account *UserAc
 		return "", err
 	}
 
-	if res.StatusCode != http.StatusCreated {
-		buf, _ := io.ReadAll(res.Body)
-		fmt.Println(string(buf))
+	switch res.StatusCode {
+	case http.StatusConflict:
+		return "", errors.New("account already exists")
+	case http.StatusCreated:
+		break
+	default:
 		return "", errors.New("failed to create account")
 	}
 
 	buf, err := io.ReadAll(res.Body)
-	fmt.Println(string(buf))
 
 	if err != nil {
 		return "", err
@@ -252,7 +288,7 @@ func (um *UserManagement) CreateUserAccount(ctx context.Context, account *UserAc
 	return created[0].(*UserAccount).ID, nil
 }
 
-func (um *UserManagement) ensureAccessToken() error {
+func (um *UserManagement) ensureAccessToken(ctx context.Context) error {
 	if um.accessToken != "" {
 		t, err := jwt.ParseNoVerify([]byte(um.accessToken))
 		if err != nil {
@@ -267,7 +303,7 @@ func (um *UserManagement) ensureAccessToken() error {
 		}
 	}
 
-	accessToken, err := um.authorizer.ClientCredentialsLogin()
+	accessToken, err := um.authorizer.ClientCredentialsLogin(ctx)
 	if err != nil {
 		return err
 	}
@@ -276,4 +312,70 @@ func (um *UserManagement) ensureAccessToken() error {
 	um.refreshToken = accessToken.RefreshedBy.Token
 
 	return nil
+}
+
+// WithHostname replaces the base host to be used for authentication requests. Useful for testing.
+func (r *Remote) WithHostname( host string) *Remote {
+	r.host = host
+	return r
+}
+
+func (r *Remote) Host() string {
+	return r.host
+}
+
+// Trim cuts the token part from the Bearer header it usually comes with
+func (pc *Remote) Trim(bearer string) string {
+	bearerPrefixLen := len("Bearer ")
+	if len(bearer) <= bearerPrefixLen {
+		return ""
+	}
+
+	if bearer[:bearerPrefixLen] == "Bearer " {
+		return bearer[bearerPrefixLen:]
+	}
+
+	return bearer
+}
+
+func (r *Remote) Validate(ctx context.Context, token string) (*jwt.RegisteredClaims, error){
+
+	payload, err := jsonapi.Marshal([]ValdiationRequest{{
+		ID:    "1",
+		Token: r.Trim(token),
+	}})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.host+"/v1/token-validations", bytes.NewBuffer(payload))
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	buf, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != http.StatusOK {
+		return nil, errors.New("validation failed")
+	}
+
+
+	validationResponse := make([]ValidationResponse, 0)
+	if err := jsonapi.Unmarshal(buf, &validationResponse); err != nil {
+		fmt.Println("error unmarhsaling", err)
+		return nil, err
+	}
+	if len(validationResponse) < 1 {
+		return nil, errors.New("no requested tokens are valid")
+	}
+
+	return &validationResponse[0].Claims, nil
 }
