@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"github.com/MereleDulci/jsonapi"
 	"github.com/cristalhq/jwt/v5"
 	"io"
@@ -21,16 +22,16 @@ func MakeLocal(clientId string, clientSecret string, publicKeyPath string) (*Loc
 
 	pubKeyFile, err := os.Open(publicKeyPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opening public key: %w", err)
 	}
 
 	pemContent, err := io.ReadAll(pubKeyFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading public key: %w", err)
 	}
 
 	if err := pubKeyFile.Close(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("closing public key: %w", err)
 	}
 
 	block, _ := pem.Decode(pemContent)
@@ -40,12 +41,12 @@ func MakeLocal(clientId string, clientSecret string, publicKeyPath string) (*Loc
 
 	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing public key: %w", err)
 	}
 
 	verifier, err := jwt.NewVerifierEdDSA(pub.(ed25519.PublicKey))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating elliptic verifier: %w", err)
 	}
 
 	return &Local{
@@ -74,22 +75,22 @@ func (pc *Local) Host() string {
 }
 
 // Validate Validates token locally using configured key and parses registered claims from it. Returns nil if validation fails.
-func (pc *Local) Validate(ctx context.Context, bearer string) (*jwt.RegisteredClaims, error) {
-	claims := &jwt.RegisteredClaims{}
-	err := jwt.ParseClaims([]byte(pc.Trim(bearer)), pc.verifier, claims)
+func (pc *Local) Validate(ctx context.Context, bearer string) (TokenClaims, error) {
+	registered := &jwt.RegisteredClaims{}
+	err := jwt.ParseClaims([]byte(pc.Trim(bearer)), pc.verifier, registered)
 	if err != nil {
-		return nil, err
+		return TokenClaims{}, fmt.Errorf("parsing claims: %w", err)
 	}
 
-	if !claims.IsValidAt(time.Now().UTC()) {
-		return nil, errors.New("token is not valid at a given time")
+	if !registered.IsValidAt(time.Now().UTC()) {
+		return TokenClaims{}, errors.New("token is not valid at a given time")
 	}
 
-	if slices.Contains(claims.Audience, pc.clientId) == false {
-		return nil, errors.New("invalid audience")
+	if slices.Contains(registered.Audience, pc.clientId) == false {
+		return TokenClaims{}, errors.New("invalid audience")
 	}
 
-	return claims, nil
+	return TokenClaims{*registered, ExtraClaims{}}, nil
 }
 
 func (pc *Local) PasswordLogin(ctx context.Context, username, password string) (*AccessToken, error) {
@@ -101,29 +102,29 @@ func (pc *Local) PasswordLogin(ctx context.Context, username, password string) (
 		"password":      password,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshaling payload: %w", err)
 	}
 
 	pasaportulPayload := bytes.NewBuffer(pasaportulJson)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pc.host+"/v1/authenticate", pasaportulPayload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("composing request: %w", err)
 	}
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pasaportul request: %w", err)
 	}
 
 	resBytes, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
 	accessToken := &AccessToken{}
 	if err := jsonapi.Unmarshal(resBytes, accessToken); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unmarshaling response: %w", err)
 	}
 
 	return accessToken, nil
@@ -136,28 +137,28 @@ func (pc *Local) ClientCredentialsLogin(ctx context.Context) (*AccessToken, erro
 		"grant_type":    "client_credentials",
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshalling payload: %w", err)
 	}
 
 	pasaportulPayload := bytes.NewBuffer(pasaportulJson)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pc.host+"/v1/authenticate", pasaportulPayload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("composing request: %w", err)
 	}
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pasaportul request: %w", err)
 	}
 
 	resBytes, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
 	accessToken := &AccessToken{}
 	if err := jsonapi.Unmarshal(resBytes, accessToken); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unmarshaling responsee: %w", err)
 	}
 
 	return accessToken, nil
