@@ -51,9 +51,10 @@ type RefreshToken struct {
 }
 
 type UserAccount struct {
-	ID       string `jsonapi:"primary,user-accounts"`
-	Username string `jsonapi:"attr,username"`
-	Password string `jsonapi:"attr,password"`
+	ID         string       `jsonapi:"primary,user-accounts"`
+	Username   string       `jsonapi:"attr,username"`
+	Password   string       `jsonapi:"attr,password"`
+	ClientApps []*ClientApp `jsonapi:"relation,clientApps"`
 }
 
 type SingleUseToken struct {
@@ -79,4 +80,8 @@ type IssueSingleUseTokenPayload struct {
 type ConsumeSingleUseTokenPayload struct {
 	ID   string `jsonapi:"primary,consume-single-use-tokens"`
 	Code string `jsonapi:"attr,code"`
+}
+
+type ClientApp struct {
+	ID string `jsonapi:"primary,client-apps"`
 }
