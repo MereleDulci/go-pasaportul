@@ -20,6 +20,7 @@ type Validator interface {
 
 type UserManager interface {
 	CreateUserAccount(ctx context.Context, account *UserAccount) (string, error)
+	InitPasswordReset(ctx context.Context, username string) (VerifiedAccountAction, error)
 }
 
 type ValdiationRequest struct {
@@ -50,11 +51,36 @@ type RefreshToken struct {
 	ConsumedAt *time.Time   `jsonapi:"attr,consumedAt,rfc3339"`
 }
 
+type OneTimePassword struct {
+	ID        string     `jsonapi:"primary,one-time-passwords"`
+	Code      string     `jsonapi:"attr,code"`
+	IssuedAt  time.Time  `jsonapi:"attr,issuedAt,rfc3339"`
+	ExpiresAt time.Time  `jsonapi:"attr,expiresAt,rfc3339"`
+	UsedAt    *time.Time `jsonapi:"attr,used,rfc3339"`
+}
+
 type UserAccount struct {
 	ID         string       `jsonapi:"primary,user-accounts"`
 	Username   string       `jsonapi:"attr,username"`
 	Password   string       `jsonapi:"attr,password"`
 	ClientApps []*ClientApp `jsonapi:"relation,clientApps"`
+}
+
+type ActionPayloadItem struct {
+	Key   string      `json:"key"`
+	Value interface{} `json:"value"`
+}
+
+type VerifiedAccountAction struct {
+	ID               string              `jsonapi:"primary,verified-account-actions"`
+	Account          *UserAccount        `jsonapi:"relation,account"`
+	OTP              *OneTimePassword    `jsonapi:"relation,otp"`
+	Username         string              `jsonapi:"attr,username"`
+	Action           string              `jsonapi:"attr,action"`
+	VerificationCode string              `jsonapi:"attr,verificationCode,omitempty"`
+	ActionPayload    []ActionPayloadItem `jsonapi:"attr,actionPayload,omitEmpty"`
+	RequestedAt      time.Time           `jsonapi:"attr,createdAt" bson:"createdAt"`
+	ExecutedAt       time.Time           `jsonapi:"attr,executedAt" bson:"executedAt"`
 }
 
 type SingleUseToken struct {

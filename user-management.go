@@ -31,8 +31,6 @@ func (um *UserManagement) CreateUserAccount(ctx context.Context, account *UserAc
 	}
 
 	raw, err := jsonapi.Marshal([]*UserAccount{account})
-	fmt.Println("encoded payload", string(raw))
-	fmt.Println("marshal error ", err)
 	if err != nil {
 		return "", err
 	}
@@ -64,10 +62,7 @@ func (um *UserManagement) CreateUserAccount(ctx context.Context, account *UserAc
 		return "", err
 	}
 
-	fmt.Println("response ", string(buf))
 	created, err := jsonapi.UnmarshalManyAsType(buf, reflect.TypeOf(new(UserAccount)))
-	fmt.Println("response unmashal err ", err)
-	fmt.Println("created account ", created)
 	if err != nil {
 		return "", err
 	}
@@ -77,6 +72,55 @@ func (um *UserManagement) CreateUserAccount(ctx context.Context, account *UserAc
 	}
 
 	return created[0].(*UserAccount).ID, nil
+}
+
+func (um *UserManagement) InitPasswordReset(ctx context.Context, username string) (VerifiedAccountAction, error) {
+	if err := um.ensureAccessToken(ctx); err != nil {
+		return VerifiedAccountAction{}, err
+	}
+
+	raw, err := jsonapi.Marshal([]VerifiedAccountAction{{
+		Username: username,
+		Action:   "reset-password",
+	}})
+	if err != nil {
+		return VerifiedAccountAction{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, um.authorizer.Host()+"/v1/verified-account-actions", bytes.NewBuffer(raw))
+	if err != nil {
+		return VerifiedAccountAction{}, err
+	}
+
+	req.Header.Add("Authorization", "Bearer "+um.accessToken)
+	req.URL.Query().Add("include", "otp")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return VerifiedAccountAction{}, err
+	}
+
+	if res.StatusCode != http.StatusCreated {
+		return VerifiedAccountAction{}, fmt.Errorf("failed to initiate password reset: %v", res.StatusCode)
+	}
+
+	buf, err := io.ReadAll(res.Body)
+
+	if err != nil {
+		return VerifiedAccountAction{}, err
+	}
+
+	created, err := jsonapi.UnmarshalManyAsType(buf, reflect.TypeOf(new(VerifiedAccountAction)))
+	if err != nil {
+		return VerifiedAccountAction{}, err
+	}
+
+	if len(created) == 0 {
+		return VerifiedAccountAction{}, errors.New("failed to initiate password reset")
+	}
+
+	return created[0].(VerifiedAccountAction), nil
+
 }
 
 func (um *UserManagement) ensureAccessToken(ctx context.Context) error {
