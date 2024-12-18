@@ -101,9 +101,6 @@ func (um *UserManagement) InitPasswordReset(ctx context.Context, username string
 	}
 
 	if res.StatusCode != http.StatusCreated {
-		resbuf, readerr := io.ReadAll(res.Body)
-		fmt.Println(readerr)
-		fmt.Println(string(resbuf))
 		return VerifiedAccountAction{}, fmt.Errorf("failed to initiate password reset: %v", res.StatusCode)
 	}
 
@@ -113,17 +110,15 @@ func (um *UserManagement) InitPasswordReset(ctx context.Context, username string
 		return VerifiedAccountAction{}, err
 	}
 
-	created, err := jsonapi.UnmarshalManyAsType(buf, reflect.TypeOf(new(VerifiedAccountAction)))
-	if err != nil {
+	created := make([]*VerifiedAccountAction, 0)
+	if err := jsonapi.Unmarshal(buf, &created); err != nil {
 		return VerifiedAccountAction{}, err
 	}
-
 	if len(created) == 0 {
 		return VerifiedAccountAction{}, errors.New("failed to initiate password reset")
 	}
 
-	return created[0].(VerifiedAccountAction), nil
-
+	return *created[0], nil
 }
 
 func (um *UserManagement) ensureAccessToken(ctx context.Context) error {
