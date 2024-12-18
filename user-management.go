@@ -101,6 +101,9 @@ func (um *UserManagement) InitPasswordReset(ctx context.Context, username string
 	}
 
 	if res.StatusCode != http.StatusCreated {
+		resbuf, readerr := io.ReadAll(res.Body)
+		fmt.Println(readerr)
+		fmt.Println(string(resbuf))
 		return VerifiedAccountAction{}, fmt.Errorf("failed to initiate password reset: %v", res.StatusCode)
 	}
 
