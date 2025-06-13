@@ -63,6 +63,7 @@ type UserAccount struct {
 	ID         string       `jsonapi:"primary,user-accounts"`
 	Username   string       `jsonapi:"attr,username"`
 	Password   string       `jsonapi:"attr,password"`
+	Authority  string       `jsonapi:"attr,authority"`
 	ClientApps []*ClientApp `jsonapi:"relation,clientApps"`
 }
 
