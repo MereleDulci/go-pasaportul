@@ -21,6 +21,8 @@ type Validator interface {
 type UserManager interface {
 	CreateUserAccount(ctx context.Context, account *UserAccount) (string, error)
 	InitPasswordReset(ctx context.Context, username string) (VerifiedAccountAction, error)
+	ChangeUsername(ctx context.Context, accountID string, newUsername string) error
+	ChangePassword(ctx context.Context, accountID string, newPassword string) error
 }
 
 type ValdiationRequest struct {
